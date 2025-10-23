@@ -1,0 +1,17 @@
+2025-10-12 00:40:59,121 - shop_bot - ERROR - main.py:374 - ❌ Ошибка создания админа: 1
+2025-10-12 10:51:50,991 - shop_bot - ERROR - main.py:374 - ❌ Ошибка создания админа: 1
+2025-10-20 09:29:04,594 - shop_bot - ERROR - scheduled_posts.py:150 - Ошибка загрузки расписания: 'NoneType' object is not iterable
+2025-10-21 07:02:04,447 - shop_bot - ERROR - scheduled_posts.py:150 - Ошибка загрузки расписания: 'NoneType' object is not iterable
+2025-10-21 07:02:19,629 - shop_bot - ERROR - scheduled_posts.py:150 - Ошибка загрузки расписания: 'NoneType' object is not iterable
+2025-10-21 07:41:57,656 - shop_bot - ERROR - scheduled_posts.py:150 - Ошибка загрузки расписания: 'NoneType' object is not iterable
+2025-10-21 09:17:23,953 - shop_bot - ERROR - scheduled_posts.py:151 - Ошибка загрузки расписания: 'NoneType' object is not iterable
+2025-10-21 09:19:53,666 - shop_bot - ERROR - scheduled_posts.py:151 - Ошибка загрузки расписания: 'NoneType' object is not iterable
+2025-10-21 09:24:09,256 - shop_bot - ERROR - scheduled_posts.py:151 - Ошибка загрузки расписания: 'NoneType' object is not iterable
+2025-10-21 09:47:00,084 - shop_bot - ERROR - scheduled_posts.py:151 - Ошибка загрузки расписания: 'NoneType' object is not iterable
+2025-10-21 09:57:33,959 - shop_bot - ERROR - scheduled_posts.py:150 - Ошибка загрузки расписания: 'NoneType' object is not iterable
+2025-10-22 05:37:00,471 - shop_bot - ERROR - main.py:374 - ❌ Ошибка создания админа: 1
+2025-10-22 07:39:02,182 - shop_bot - ERROR - main.py:374 - ❌ Ошибка создания админа: 1
+2025-10-22 07:39:02,859 - shop_bot - ERROR - scheduled_posts.py:150 - Ошибка загрузки расписания: too many values to unpack (expected 8)
+2025-10-23 05:01:24,960 - shop_bot - ERROR - scheduled_posts.py:148 - Ошибка загрузки расписания: 'ScheduledPostsManager' object has no attribute 'db'
+2025-10-23 05:33:47,945 - shop_bot - ERROR - scheduled_posts.py:148 - Ошибка загрузки расписания: 'ScheduledPostsManager' object has no attribute 'db'
+2025-10-23 05:35:32,287 - shop_bot - ERROR - scheduled_posts.py:148 - Ошибка загрузки расписания: 'ScheduledPostsManager' object has no attribute 'db'
