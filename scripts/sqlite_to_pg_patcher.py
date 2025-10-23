@@ -1,0 +1,116 @@
+
+import os, re, sys, argparse, json
+from pathlib import Path
+
+PATCHES = [
+    (
+        re.compile(r"""datetime\(\s*['"]now['"]\s*,\s*['"]-(\d+)\s+hours?['"]\s*\)""", re.IGNORECASE),
+        lambda m: f"(NOW() - INTERVAL '{m.group(1)} hours')",
+        "datetime(now,-N hours) -> NOW() - INTERVAL 'N hours'",
+    ),
+    (
+        re.compile(r"""datetime\(\s*['"]now['"]\s*,\s*['"]-(\d+)\s+days?['"]\s*\)""", re.IGNORECASE),
+        lambda m: f"(NOW() - INTERVAL '{m.group(1)} day')",
+        "datetime(now,-N days) -> NOW() - INTERVAL 'N day'",
+    ),
+    (
+        re.compile(r"""date\(\s*['"]now['"]\s*,\s*['"]-(\d+)\s+days?['"]\s*\)""", re.IGNORECASE),
+        lambda m: f"(NOW() - INTERVAL '{m.group(1)} day')",
+        "date(now,-N days) -> NOW() - INTERVAL 'N day'",
+    ),
+    (
+        re.compile(r"""date\(\s*['"]now['"]\s*,\s*['"]-(\d+)\s+hours?['"]\s*\)""", re.IGNORECASE),
+        lambda m: f"(NOW() - INTERVAL '{m.group(1)} hours')",
+        "date(now,-N hours) -> NOW() - INTERVAL 'N hours'",
+    ),
+    (
+        re.compile(r"""strftime\(\s*['"]%Y-%m-%d['"]\s*,\s*['"]now['"]\s*\)""", re.IGNORECASE),
+        lambda m: "TO_CHAR(NOW(), 'YYYY-MM-DD')",
+        "TO_CHAR(NOW(), 'YYYY-MM-DD') -> TO_CHAR(NOW(),'YYYY-MM-DD')",
+    ),
+    (
+        re.compile(r"""\bIFNULL\s*\(""", re.IGNORECASE),
+        lambda m: "COALESCE(",
+        "COALESCE(...) -> COALESCE(...)",
+    ),
+    (
+        re.compile(r"""HAVING\s+total_spent\s*>=\s*([0-9]+(?:\.[0-9]+)?)""", re.IGNORECASE),
+        lambda m: f"HAVING SUM(total_amount) >= {m.group(1)}",
+        "HAVING SUM(total_amount) >= X -> HAVING SUM(total_amount) >= X",
+    ),
+]
+
+def should_skip_dir(p: Path):
+    skip = {".git", ".hg", ".svn", ".idea", ".vscode", "node_modules", ".venv", "venv", "__pycache__"}
+    return p.name in skip
+
+def scan_and_patch(root: Path, extensions, dry_run=False, verbose=False):
+    total_files = 0
+    total_patches = 0
+    changed_files = []
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        # prune
+        dirnames[:] = [d for d in dirnames if not should_skip_dir(Path(d))]
+        for fname in filenames:
+            ext = Path(fname).suffix.lower()
+            if extensions and ext not in extensions:
+                continue
+            fpath = Path(dirpath) / fname
+            try:
+                s = fpath.read_text(encoding="utf-8", errors="ignore")
+            except Exception as e:
+                if verbose:
+                    print(f"[skip] {fpath} ({e})")
+                continue
+
+            original = s
+            per_file_patches = 0
+            for creg, repl, desc in PATCHES:
+                new_s, n = creg.subn(repl, s)
+                if n and verbose:
+                    print(f"[{desc}] {fpath}  (+{n})")
+                s = new_s
+                per_file_patches += n
+
+            if per_file_patches > 0:
+                total_files += 1
+                total_patches += per_file_patches
+                changed_files.append({"file": str(fpath), "count": per_file_patches})
+                if not dry_run:
+                    # backup
+                    bak = fpath.with_suffix(fpath.suffix + ".bak")
+                    try:
+                        bak.write_text(original, encoding="utf-8")
+                    except Exception as e:
+                        print(f"[warn] failed to write backup for {fpath}: {e}")
+                    try:
+                        fpath.write_text(s, encoding="utf-8")
+                    except Exception as e:
+                        print(f"[error] failed to write patched {fpath}: {e}")
+
+    return total_files, total_patches, changed_files
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Patch common SQLite SQL to Postgres equivalents", add_help=True)
+    ap.add_argument("root", nargs="?", default=".", help="root folder to scan")
+    ap.add_argument("--ext", nargs="*", default=[".py", ".sql", ".psql", ".sql.j2", ".txt"], help="file extensions to include")
+    ap.add_argument("--dry-run", action="store_true", help="scan and show without writing changes")
+    ap.add_argument("--verbose", "-v", action="store_true", help="verbose output")
+    # be tolerant to unknown args (Jupyter etc.)
+    if argv is None:
+        argv = sys.argv[1:]
+    args, _unknown = ap.parse_known_args(argv)
+
+    root = Path(args.root).resolve()
+    files, patches, changed = scan_and_patch(root, set(e.lower() for e in args.ext), dry_run=args.dry_run, verbose=args.verbose)
+
+    print(json.dumps({
+        "root": str(root),
+        "changed_files": files,
+        "total_replacements": patches,
+        "details": changed
+    }, ensure_ascii=False, indent=2))
+
+if __name__ == "__main__":
+    main()

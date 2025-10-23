@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+# Simple fixer to convert common SQLite-specific SQL into PostgreSQL-compatible SQL
+# across your project source files (.py and .sql).
+#
+# What it does:
+#   1) datetime('now','-N units')  -> NOW() - INTERVAL 'N units'
+#      Supports units: hour(s), minute(s), day(s)
+#   2) HAVING SUM(total_amount) <op> N   -> HAVING SUM(total_amount) <op> N
+#      (fixes use of alias in HAVING)
+#
+# Usage:
+#   python3 scripts/patch_sqlite_to_pg.py <path-to-project>   # defaults to current dir
+#
+import re
+import sys
+from pathlib import Path
+
+# Patterns
+DATETIME_PATTERN = re.compile(
+    r"""datetime\(\s*['"]now['"]\s*,\s*['"]-(\d+)\s+(hour|hours|minute|minutes|day|days)['"]\s*\)""",
+    flags=re.IGNORECASE
+)
+
+def repl_datetime(m: re.Match) -> str:
+    qty = m.group(1)
+    unit = m.group(2).lower()
+    # Postgres accepts both singular/plural in INTERVAL text; keep as-is
+    return f"NOW() - INTERVAL '{qty} {unit}'"
+
+# Replace "HAVING SUM(total_amount) ..." with "HAVING SUM(total_amount) ..."
+HAVING_ALIAS_PATTERN = re.compile(
+    r"""HAVING\s+total_spent(\s*[<>=!]+\s*\d+)""",
+    flags=re.IGNORECASE
+)
+
+def repl_having_alias(m: re.Match) -> str:
+    tail = m.group(1)
+    return f"HAVING SUM(total_amount){tail}"
+
+def patch_text(text: str) -> str:
+    new = DATETIME_PATTERN.sub(repl_datetime, text)
+    new = HAVING_ALIAS_PATTERN.sub(repl_having_alias, new)
+    return new
+
+def process_file(path: Path) -> bool:
+    try:
+        original = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception as e:
+        print(f"[skip] {path}: read error: {e}")
+        return False
+    patched = patch_text(original)
+    if patched != original:
+        # Backup once
+        bak = path.with_suffix(path.suffix + ".bak")
+        if not bak.exists():
+            try:
+                bak.write_text(original, encoding="utf-8")
+            except Exception as e:
+                print(f"[warn] {path}: could not write backup: {e}")
+        try:
+            path.write_text(patched, encoding="utf-8")
+            print(f"[fix]  {path}")
+            return True
+        except Exception as e:
+            print(f"[err]  {path}: write error: {e}")
+            return False
+    return False
+
+def main():
+    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
+    if not root.exists():
+        print(f"Path not found: {root}")
+        sys.exit(1)
+    exts = {".py", ".sql"}
+    changed = 0
+    for p in root.rglob("*"):
+        if p.is_file() and p.suffix.lower() in exts:
+            if process_file(p):
+                changed += 1
+    print(f"Done. Patched files: {changed}")
+
+if __name__ == "__main__":
+    main()
