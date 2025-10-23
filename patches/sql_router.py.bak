@@ -1,0 +1,140 @@
+
+import os, re, json, httpx, logging
+
+def _env(k: str) -> str:
+    v = os.getenv(k, "").strip().strip('"').strip("'").rstrip("/")
+    return v
+
+SUPABASE_URL  = _env("SUPABASE_URL")
+API_KEY       = _env("SUPABASE_SERVICE_ROLE_KEY") or _env("SUPABASE_ANON_KEY")
+
+if not SUPABASE_URL or not API_KEY:
+    logging.warning("[sql_router] SUPABASE_URL or API key not set")
+
+HEADERS = {
+    "apikey": API_KEY,
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json",
+}
+
+def _url(path: str) -> str:
+    if not SUPABASE_URL.startswith("http"):
+        raise RuntimeError("SUPABASE_URL is not set correctly")
+    return f"{SUPABASE_URL}{path}"
+
+def _rest_select(table: str, select: str="*", filters: dict | None=None, limit: int | None=None):
+    params = {"select": select}
+    if filters:
+        for k, v in filters.items():
+            params[k] = v
+    headers = HEADERS.copy()
+    r = httpx.get(_url(f"/rest/v1/{table}"), headers=headers, params=params, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    if limit == 1:
+        # emulate single-row fetch
+        return data[0] if data else None
+    return data
+
+def _rest_insert(table: str, payload):
+    headers = HEADERS.copy()
+    headers["Prefer"] = "return=representation"
+    r = httpx.post(_url(f"/rest/v1/{table}"), headers=headers, json=payload, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+def _bool_str(v: str) -> str:
+    return "true" if v.lower() in ("true","t","1") else "false"
+
+def _parse_insert(sql: str):
+    m = re.search(r"INSERT\s+INTO\s+([a-zA-Z_][\w]*)\s*\((.*?)\)\s*VALUES\s*\((.*)\)", sql, re.IGNORECASE|re.DOTALL)
+    if not m:
+        return None
+    table = m.group(1)
+    cols  = [c.strip().strip('"') for c in m.group(2).split(",")]
+    vals_raw = m.group(3).strip()
+    # split vals respecting JSON brackets and quotes
+    vals, buf, q, depth = [], "", None, 0
+    i = 0
+    while i < len(vals_raw):
+        ch = vals_raw[i]
+        if q:
+            buf += ch
+            if ch == q and vals_raw[i-1] != "\\":
+                q = None
+        else:
+            if ch in ("'", '"'):
+                q = ch; buf += ch
+            elif ch in ("(", "[", "{"):
+                depth += 1; buf += ch
+            elif ch in (")", "]", "}"):
+                depth = max(0, depth-1); buf += ch
+            elif ch == "," and depth == 0:
+                vals.append(buf.strip()); buf = ""
+            else:
+                buf += ch
+        i += 1
+    if buf.strip():
+        vals.append(buf.strip())
+    # map to python types
+    payload = {}
+    for c, v in zip(cols, vals):
+        vv = v.strip()
+        if re.fullmatch(r"(?i)true|false", vv):
+            payload[c] = vv.lower()=="true"
+        elif re.fullmatch(r"\d+", vv):
+            payload[c] = int(vv)
+        elif re.fullmatch(r"\d+\.\d+", vv):
+            payload[c] = float(vv)
+        elif re.fullmatch(r"'(.*)'", vv, re.DOTALL):
+            payload[c] = vv[1:-1].replace("\\'", "'")
+        elif re.fullmatch(r"'\{.*\}'", vv, re.DOTALL) or re.fullmatch(r"'\[.*\]'", vv, re.DOTALL):
+            try:
+                payload[c] = json.loads(vv[1:-1])
+            except Exception:
+                payload[c] = vv[1:-1]
+        elif vv.upper().startswith("NOW()"):
+            payload[c] = None  # server default; omit
+        else:
+            payload[c] = vv
+    # remove None to let defaults apply
+    payload = {k:v for k,v in payload.items() if v is not None}
+    return table, payload
+
+def _parse_simple_select(sql: str):
+    m = re.search(r"SELECT\s+(.*?)\s+FROM\s+([a-zA-Z_][\w]*)\s*(WHERE\s+(.*))?$", sql, re.IGNORECASE|re.DOTALL)
+    if not m:
+        return None
+    select = m.group(1).strip()
+    table  = m.group(2).strip()
+    where  = (m.group(4) or "").strip()
+    # Only handle simple ANDed conditions: col = value
+    filters = {}
+    if where:
+        # remove trailing semicolon if present
+        where = where.rstrip(";")
+        parts = re.split(r"\s+AND\s+", where, flags=re.IGNORECASE)
+        for p in parts:
+            p = p.strip()
+            m2 = re.match(r"([a-zA-Z_][\w]*)\s*=\s*(.+)$", p)
+            if not m2:
+                # handle boolean "is_active = true"
+                m2 = re.match(r"([a-zA-Z_][\w]*)\s*=\s*(true|false)", p, re.IGNORECASE)
+            if m2:
+                col = m2.group(1)
+                val = m2.group(2).strip()
+                if re.fullmatch(r"'(.*)'", val):
+                    val = val[1:-1]
+                    filters[col] = f"eq.{val}"
+                elif val.lower() in ("true","false"):
+                    filters[col] = f"eq.{val.lower()}"
+                elif re.fullmatch(r"\d+", val):
+                    filters[col] = f"eq.{val}"
+                else:
+                    # If unknown, send as eq.<raw>
+                    filters[col] = f"eq.{val}"
+    # normalize select list spacing
+    select = ", ".join([s.strip() for s in select.split(",")])
+    return table, select, filters
+
+from patches.sql_router import execute_query
